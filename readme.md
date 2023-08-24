@@ -3,16 +3,17 @@
 Features:
 - [x] ACID-compliant
 - [x] Embedded (just a library, your database is embedded in your executable)
-- [x] Database files are plain-text encoded, they can be shown and edited in any text-editor.
+- [x] Database files are plain-text encoded, they can be shown and modified in a text-editor.
 - [x] A key can have multiple values (like a history)
 - [x] Built for prototypes and small projects
+- [x] Zero-dependecy tiny codebase (less than 1000 SLOC)
 
 Quirks, limitations and potential gotchas:
 - Keys are stored in memory (in a trie)
 - No sub-groups of key-value pairs, everything is in the same "bucket" / "table" / "collection"
-- Lacks reliable file corruption recovery (for failed disk I/O write operations)
+- Lacks reliable file corruption recovery (ex: failed disk I/O write operations)
 - When reading a key-value pair, the returned value will be nil when the key is not found (and no error is returned).
-	Callers should instead check for a nil value when the key may not exist.
+	Callers should check for a nil value when the key may not exist. (deliberate design decision)
 - Limited to a single process (as embedded databases go)
 
 ## Use as Go library (embedded database)

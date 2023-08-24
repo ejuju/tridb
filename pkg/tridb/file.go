@@ -18,6 +18,7 @@ type Row struct {
 	Key, Value []byte
 }
 
+// Write operations encoded into rows.
 const (
 	OpSet    byte = '+'
 	OpDelete byte = '-'
