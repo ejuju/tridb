@@ -69,7 +69,9 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 	return nil
 }
 
-var ErrBreak = errors.New("break") // special error to abort a read-write transaction or exit a walk.
+// ErrBreak is an error that can be used to abort a read-write transaction or exit a walk.
+// It is only declared for convenience, it does nothing special.
+var ErrBreak = errors.New("break")
 
 func (f *File) Read(do func(r *Reader) error) error {
 	f.mu.RLock()
