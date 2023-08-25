@@ -23,3 +23,10 @@ Quirks, limitations and potential gotchas:
 References:
 - https://scholar.harvard.edu/files/stratos/files/keyvaluestorageengines.pdf
 - https://riak.com/assets/bitcask-intro.pdf
+
+Roadmap:
+- Indexing support
+- Use as remote server
+- Support replication
+- Web GUI
+- Better REPL

@@ -144,6 +144,17 @@ func (f *File) Compact() error {
 	return nil
 }
 
+// Copies the datafile to the given writer.
+// Can be used to backup the datafile to another file or to a HTTP response writer for example.
+func (f *File) CopyTo(dst io.Writer) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.r.Seek(0, io.SeekStart)
+	n, err := io.Copy(dst, f.r)
+	return int(n), err
+}
+
 // Path returns the path with which the database file was opened.
 func (f *File) Path() string { return f.fpath }
 
