@@ -18,14 +18,13 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-	if len(os.Args) <= 2 {
-		fmt.Println("missing database file path and encoding format")
+	if len(os.Args) <= 1 {
+		fmt.Println("missing database file path")
 		return
 	}
 
-	format := tridb.FormatFromString(os.Args[2])
 	start := time.Now()
-	f, err := tridb.Open(os.Args[1], format)
+	f, err := tridb.Open(os.Args[1])
 	if err != nil {
 		log.Println(err)
 		return
@@ -98,22 +97,7 @@ var commands = []*command{
 		desc:    "removes deleted key-value pairs and rewrites rows in lexicographical order",
 		do: func(f *tridb.File, args ...string) {
 			start := time.Now()
-			err := f.Compact(nil)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-			fmt.Printf("compacted in %s\n", time.Since(start))
-		},
-	},
-	{
-		keyword: "compact-format",
-		desc:    "compact in a new format",
-		args:    []string{"format ('text' or 'text-auto-length')"},
-		do: func(f *tridb.File, args ...string) {
-			start := time.Now()
-			format := tridb.FormatFromString(args[0])
-			err := f.Compact(format)
+			err := f.Compact()
 			if err != nil {
 				fmt.Println(err)
 				return
@@ -161,21 +145,19 @@ var commands = []*command{
 		args:    []string{"key"},
 		do: func(f *tridb.File, args ...string) {
 			key := []byte(args[0])
-			var value []byte
-			err := f.Read(func(r *tridb.Reader) error {
-				v, err := r.Get(key).CurrentValue()
-				value = v
-				return err
+			_ = f.Read(func(r *tridb.Reader) error {
+				value, err := r.Get(key)
+				if err != nil {
+					fmt.Println(err)
+					return nil
+				}
+				if value == nil {
+					fmt.Printf("%q not found\n", key)
+					return nil
+				}
+				fmt.Printf("%q = %q\n", key, value)
+				return nil
 			})
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-			if value == nil {
-				fmt.Printf("%q not found\n", key)
-				return
-			}
-			fmt.Printf("%q = %q\n", key, value)
 		},
 	},
 	{

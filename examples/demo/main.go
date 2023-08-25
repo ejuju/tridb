@@ -9,7 +9,7 @@ import (
 
 func main() {
 	// Open the database file
-	f, err := tridb.Open("main.tridb", nil)
+	f, err := tridb.Open("main.tridb")
 	if err != nil {
 		panic(err)
 	}
@@ -20,19 +20,12 @@ func main() {
 	// Compacting the file consists in removing deleted key-value pairs
 	// and re-writing the key-value pairs ordered lexicographically by key.
 	// Key-value pairs with the same key are kept in the order they were written in (chronological).
-	// During compaction, the file encoding format may be changed to a new one.
-	err = f.Compact(nil)
+	err = f.Compact()
 	if err != nil {
 		panic(err)
 	}
 
-	// Add a key-value pair
-	//
-	// Note: To abort the transaction, the callback should return a non-nil error.
-	// Callback errors are returned back to the caller.
-	//
-	// When adding a key-value pair, eventual previous key-value pairs with the same key are not erased.
-	// Instead they are simply kept in the file and in memory. Previous versions can then be accessed.
+	// Set a key-value pair
 	err = f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
 		w.Set([]byte("my-key"), []byte("my-value"))
 		return nil
@@ -53,34 +46,9 @@ func main() {
 	// Read a key-value pair
 	//
 	// Note: Value is nil if key not found.
-	//
-	// Note: the returned error can only originate from the callback, therefore it can be ignored if the
-	// callback never fails (for example, when using `r.Has`, `r.Walk` or `r.Count`).
 	_ = f.Read(func(r *tridb.Reader) error {
-		v, err := r.Get([]byte("my-key")).CurrentValue()
+		v, err := r.Get([]byte("my-key"))
 		log.Println(v, err)
-		return nil
-	})
-
-	// Read past versions of a key-value pair
-	_ = f.Read(func(r *tridb.Reader) error {
-		versions := r.Get([]byte("my-key"))
-
-		l := versions.Length()      // Get the number of versions (0 if key not found)
-		v, err := versions.Value(0) // Get the oldest version
-		log.Println(l, v, err)
-
-		// Iterate over all past versions (from oldest to newest)
-		for i := 0; i < versions.Length(); i++ {
-			v, err := versions.Value(i)
-			log.Println(v, err)
-		}
-
-		// Iterate over all past versions (from newest to oldest)
-		for i := versions.Length() - 1; i >= 0; i-- {
-			v, err := versions.Value(i)
-			log.Println(v, err)
-		}
 		return nil
 	})
 
@@ -113,14 +81,7 @@ func main() {
 			return nil
 		})
 
-		// Iterate over all keys and (current) values (in lexicographical order)
-		_ = r.WalkWithVersions(nil, func(key []byte, versions *tridb.Versions) error {
-			v, err := versions.CurrentValue()
-			log.Println(key, v, err)
-			return nil
-		})
-
-		// Iterate over keys (in reverse lexicographical order)
+		// Iterate over all unique keys (in reverse lexicographical order)
 		_ = r.Walk(&tridb.WalkOptions{Reverse: true}, func(key []byte) error {
 			log.Println(key)
 			return nil
@@ -129,6 +90,12 @@ func main() {
 		// Iterate over keys with a given prefix
 		_ = r.Walk(&tridb.WalkOptions{Prefix: []byte("my-")}, func(key []byte) error {
 			log.Println(key)
+			return nil
+		})
+
+		// Iterate over all keys and (current) values (in lexicographical order)
+		_ = r.WalkWithValue(nil, func(key, value []byte) error {
+			log.Println(key, value)
 			return nil
 		})
 

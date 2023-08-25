@@ -1,13 +1,19 @@
 package tridb
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
 	"os"
 )
 
+// ErrBreak is an error that can be used to abort a read-write transaction or exit a walk.
+// It is only declared for convenience, it does nothing special.
+var ErrBreak = errors.New("break")
+
+// Read-write executes a read-write transaction.
+//
+// The transaction can be aborted by returning a non-nil error in the callback.
 func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -23,7 +29,7 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 	startOffset := f.woffset
 	for _, row := range w.rows {
 		// Encode row
-		encoded, err := f.fmt.Encode(row)
+		encoded, err := row.Encode()
 		if err != nil {
 			if f.woffset == startOffset {
 				return fmt.Errorf("encode: %w", err)
@@ -54,9 +60,9 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		default:
 			panic(fmt.Errorf("file corruption: unexpected op %q", row.Op))
 		case OpSet:
-			f.km.set(row.Key, [2]int{f.woffset - n, n})
+			f.keydir.set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
-			f.km.delete(row.Key)
+			f.keydir.delete(row.Key)
 		}
 	}
 
@@ -69,10 +75,9 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 	return nil
 }
 
-// ErrBreak is an error that can be used to abort a read-write transaction or exit a walk.
-// It is only declared for convenience, it does nothing special.
-var ErrBreak = errors.New("break")
-
+// Note: In a read-only transaction,
+// the returned error can only originate from the callback, therefore it can be ignored if the
+// callback never fails (for example, when using `r.Has`, `r.Walk` or `r.Count`).
 func (f *File) Read(do func(r *Reader) error) error {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -93,61 +98,55 @@ func (w *Writer) Delete(key []byte) {
 
 type Reader struct{ f *File }
 
-func (r *Reader) Has(key []byte) bool { return r.f.km.get(key) != nil }
+func (r *Reader) Has(key []byte) bool { return r.f.keydir.get(key) != nil }
 
-func (r *Reader) Count(prefix []byte) int {
-	count := 0
-	r.f.km.walk(nil, func(key []byte, history [][2]int) error { count++; return nil })
-	return count
-}
-
-func (r *Reader) Walk(opts *WalkOptions, do func(key []byte) error) error {
-	return r.f.km.walk(opts, func(key []byte, _ [][2]int) error { return do(key) })
-}
-
-func (r *Reader) WalkWithVersions(opts *WalkOptions, do func(key []byte, history *Versions) error) error {
-	return r.f.km.walk(opts, func(key []byte, history [][2]int) error {
-		return do(key, &Versions{r: r, history: history})
-	})
-}
-
-// Get returns the history for the given key,
-// Even if the key is not found, an history (with length 0) is returned.
-func (r *Reader) Get(key []byte) *Versions { return &Versions{r: r, history: r.f.km.get(key)} }
-
-type Versions struct {
-	r       *Reader
-	history [][2]int
-}
-
-func (h *Versions) Length() int { return len(h.history) }
-
-// Value returns the value in the key history at the given index.
-// If the history is empty, the returned value is nil.
-func (h *Versions) Value(i int) ([]byte, error) {
-	if len(h.history) == 0 {
+// Get returns the eventual value associated with the given key,
+// if the key is not found, a nil value is returned.
+// If an error is returned, it is internal (failed OS read or decoding).
+func (r *Reader) Get(key []byte) ([]byte, error) {
+	position := r.f.keydir.get(key)
+	if position == nil {
 		return nil, nil
 	}
-	if i < 0 || i > len(h.history)-1 {
-		return nil, fmt.Errorf("invalid history index %d (max %d)", i, len(h.history)-1)
-	}
-
-	// Read row
-	position := h.history[i]
-	encodedRow := make([]byte, position[1])
-	_, err := h.r.f.r.ReadAt(encodedRow, int64(position[0]))
+	row, err := r.readAndDecode(position)
 	if err != nil {
-		return nil, fmt.Errorf("read row: %w", err)
+		return nil, err
 	}
-
-	// Decode row
-	row := &Row{}
-	_, err = h.r.f.fmt.DecodeFrom(bufio.NewReader(bytes.NewReader(encodedRow)), row)
-	if err != nil {
-		return nil, fmt.Errorf("decode row: %w", err)
-	}
-
 	return row.Value, nil
 }
 
-func (h *Versions) CurrentValue() ([]byte, error) { return h.Value(h.Length() - 1) }
+func (r *Reader) Walk(opts *WalkOptions, do func(key []byte) error) error {
+	return r.f.keydir.walk(opts, func(key []byte, _ *RowPosition) error { return do(key) })
+}
+
+func (r *Reader) WalkWithValue(opts *WalkOptions, do func(key, value []byte) error) error {
+	return r.f.keydir.walk(opts, func(key []byte, position *RowPosition) error {
+		row, err := r.readAndDecode(position)
+		if err != nil {
+			return err
+		}
+		return do(key, row.Value)
+	})
+}
+
+func (r *Reader) Count(prefix []byte) int {
+	count := 0
+	r.f.keydir.walk(nil, func(key []byte, _ *RowPosition) error { count++; return nil })
+	return count
+}
+
+func (r *Reader) readAndDecode(position *RowPosition) (*Row, error) {
+	// Read row
+	encodedRow := make([]byte, position.Size)
+	_, err := r.f.r.ReadAt(encodedRow, int64(position.Offset))
+	if err != nil {
+		return nil, fmt.Errorf("read row: %w", err)
+	}
+	// Decode row
+	row := &Row{}
+	_, err = row.DecodeFrom(bytes.NewReader(encodedRow))
+	if err != nil {
+		return nil, fmt.Errorf("decode row: %w", err)
+	}
+	return row, nil
+}
