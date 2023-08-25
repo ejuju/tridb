@@ -10,6 +10,8 @@ Features:
 
 Quirks, limitations and potential gotchas:
 - Keys are stored in memory (in a trie)
+- Max key length is 255
+- Max value length is around 4.2 GB
 - No sub-groups of key-value pairs, everything is in the same "bucket" / "table" / "collection".
 	You may implement this by using a pre-defined key-suffix for each collection.
 	or using a dedicated file for each collection.

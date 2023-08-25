@@ -59,7 +59,13 @@ func handleCommand(f *tridb.File, line string) {
 
 	// Find and exec command
 	for _, cmd := range commands {
-		if cmd.keyword == keyword {
+		isMatch := false
+		for _, kw := range cmd.keywords {
+			if kw == keyword {
+				isMatch = true
+			}
+		}
+		if isMatch {
 			var args []string
 			if len(cmd.args) > 0 {
 				if len(parts)-1 != len(cmd.args) {
@@ -80,21 +86,21 @@ func handleCommand(f *tridb.File, line string) {
 func printAvailableCommands(commands []*command) {
 	fmt.Println("Available commands:")
 	for _, cmd := range commands {
-		fmt.Printf("> \033[033m%-15s\033[0m \033[2m%s\033[0m\n", cmd.keyword, cmd.desc)
+		fmt.Printf("> \033[033m%-15s\033[0m \033[2m%s\033[0m\n", cmd.keywords[0], cmd.desc)
 	}
 }
 
 type command struct {
-	desc    string
-	keyword string
-	args    []string
-	do      func(f *tridb.File, args ...string)
+	desc     string
+	keywords []string
+	args     []string
+	do       func(f *tridb.File, args ...string)
 }
 
 var commands = []*command{
 	{
-		keyword: "compact",
-		desc:    "removes deleted key-value pairs and rewrites rows in lexicographical order",
+		keywords: []string{"compact"},
+		desc:     "removes deleted key-value pairs and rewrites rows in lexicographical order",
 		do: func(f *tridb.File, args ...string) {
 			start := time.Now()
 			err := f.Compact()
@@ -106,9 +112,9 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "set",
-		desc:    "set a key-value pair in the database",
-		args:    []string{"key", "value"},
+		keywords: []string{"set", "+"},
+		desc:     "set a key-value pair in the database",
+		args:     []string{"key", "value"},
 		do: func(f *tridb.File, args ...string) {
 			key, value := []byte(args[0]), []byte(args[1])
 			err := f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
@@ -123,9 +129,9 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "delete",
-		desc:    "delete a key-value pair from the database",
-		args:    []string{"key"},
+		keywords: []string{"delete", "-"},
+		desc:     "delete a key-value pair from the database",
+		args:     []string{"key"},
 		do: func(f *tridb.File, args ...string) {
 			key := []byte(args[0])
 			err := f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
@@ -140,9 +146,9 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "get",
-		desc:    "get the value associated with a given key",
-		args:    []string{"key"},
+		keywords: []string{"get"},
+		desc:     "get the value associated with a given key",
+		args:     []string{"key"},
 		do: func(f *tridb.File, args ...string) {
 			key := []byte(args[0])
 			_ = f.Read(func(r *tridb.Reader) error {
@@ -161,9 +167,9 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "has",
-		desc:    "reports whether a key exists",
-		args:    []string{"key"},
+		keywords: []string{"has"},
+		desc:     "reports whether a key exists",
+		args:     []string{"key"},
 		do: func(f *tridb.File, args ...string) {
 			key := []byte(args[0])
 			_ = f.Read(func(r *tridb.Reader) error {
@@ -173,8 +179,8 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "count",
-		desc:    "reports the number of unique keys",
+		keywords: []string{"count"},
+		desc:     "reports the number of unique keys",
 		do: func(f *tridb.File, args ...string) {
 			_ = f.Read(func(r *tridb.Reader) error {
 				fmt.Println(r.Count([]byte{}))
@@ -183,9 +189,9 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "count-prefix",
-		desc:    "reports the number of unique keys with the given prefix",
-		args:    []string{"prefix"},
+		keywords: []string{"count-prefix"},
+		desc:     "reports the number of unique keys with the given prefix",
+		args:     []string{"prefix"},
 		do: func(f *tridb.File, args ...string) {
 			prefix := []byte(args[0])
 			_ = f.Read(func(r *tridb.Reader) error {
@@ -195,8 +201,8 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "all",
-		desc:    "show all unique keys",
+		keywords: []string{"all"},
+		desc:     "show all unique keys",
 		do: func(f *tridb.File, args ...string) {
 			_ = f.Read(func(r *tridb.Reader) error {
 				return r.Walk(nil, func(key []byte) error {
@@ -207,9 +213,9 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "all-prefix",
-		desc:    "show all unique keys",
-		args:    []string{"prefix"},
+		keywords: []string{"all-prefix"},
+		desc:     "show all unique keys",
+		args:     []string{"prefix"},
 		do: func(f *tridb.File, args ...string) {
 			prefix := []byte(args[0])
 			_ = f.Read(func(r *tridb.Reader) error {
@@ -221,9 +227,9 @@ var commands = []*command{
 		},
 	},
 	{
-		keyword: "fill",
-		desc:    "fill the database with the given number of key-value pairs",
-		args:    []string{"number"},
+		keywords: []string{"fill"},
+		desc:     "fill the database with the given number of key-value pairs",
+		args:     []string{"number"},
 		do: func(f *tridb.File, args ...string) {
 			start := time.Now()
 			num, err := strconv.Atoi(args[0])

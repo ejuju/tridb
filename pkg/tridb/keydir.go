@@ -1,7 +1,9 @@
 package tridb
 
+// Keydir keeps track of the location of rows in the datafile and the number of unique keys.
 type keydir struct {
-	root *keydirNode
+	count int
+	root  *keydirNode
 }
 
 type keydirNode struct {
@@ -19,6 +21,9 @@ func (km *keydir) set(key []byte, position *RowPosition) {
 		}
 		curr = curr.children[c]
 	}
+	if curr.position == nil {
+		km.count++
+	}
 	curr.position = position
 }
 
@@ -30,6 +35,7 @@ func (km *keydir) delete(key []byte) {
 		}
 		curr = curr.children[c]
 	}
+	km.count--
 	curr.position = nil
 }
 
@@ -73,23 +79,11 @@ func (n *keydirNode) walk(reverse bool, prefix []byte, do func(key []byte, posit
 		}
 	}
 
-	// Walk in reverse lexicographical order
+	start, end, next := 0, len(n.children)-1, func(i int) int { return i + 1 }
 	if reverse {
-		for c := len(n.children) - 1; c >= 0; c-- {
-			child := n.children[c]
-			if child == nil {
-				continue
-			}
-			err := child.walk(reverse, append(prefix, byte(c)), do)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
+		start, end, next = len(n.children)-1, 0, func(i int) int { return i - 1 }
 	}
-
-	// Walk in lexicographical order
-	for c := 0; c < len(n.children); c++ {
+	for c := start; c != end; c = next(c) {
 		child := n.children[c]
 		if child == nil {
 			continue
