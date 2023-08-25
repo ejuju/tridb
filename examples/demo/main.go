@@ -62,8 +62,8 @@ func main() {
 
 	// Count the number of unique keys
 	_ = f.Read(func(r *tridb.Reader) error {
-		num := r.Count([]byte{})                // Count all unique keys
-		numWithPrefix := r.Count([]byte("my-")) // Count unique keys with prefix
+		num := r.Count()                              // Count all unique keys
+		numWithPrefix := r.CountPrefix([]byte("my-")) // Count unique keys with prefix
 		log.Println(num, numWithPrefix)
 		return nil
 	})

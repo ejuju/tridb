@@ -280,7 +280,17 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 }
 
 // Count returns the number of unique keys in the database.
-func (r *Reader) Count(prefix []byte) int { return r.f.keydir.count }
+func (r *Reader) Count() int { return r.f.keydir.count }
+
+// Count prefix returns the number of unique keys with the given prefix.
+func (r *Reader) CountPrefix(prefix []byte) int {
+	count := 0
+	_ = r.f.keydir.walk(&WalkOptions{Prefix: prefix}, func(key []byte, position *RowPosition) error {
+		count++
+		return nil
+	})
+	return count
+}
 
 // Walk iterates over the keys in the database.
 // It stops iterating if an error is returned in the callback.

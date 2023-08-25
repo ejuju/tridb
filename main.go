@@ -100,7 +100,7 @@ type command struct {
 var commands = []*command{
 	{
 		keywords: []string{"compact"},
-		desc:     "removes deleted key-value pairs and rewrites rows in lexicographical order",
+		desc:     "removes deleted key-value pairs and re-writes rows in lexicographical order",
 		do: func(f *tridb.File, args ...string) {
 			start := time.Now()
 			err := f.Compact()
@@ -183,7 +183,7 @@ var commands = []*command{
 		desc:     "reports the number of unique keys",
 		do: func(f *tridb.File, args ...string) {
 			_ = f.Read(func(r *tridb.Reader) error {
-				fmt.Println(r.Count([]byte{}))
+				fmt.Println(r.Count())
 				return nil
 			})
 		},
@@ -195,7 +195,7 @@ var commands = []*command{
 		do: func(f *tridb.File, args ...string) {
 			prefix := []byte(args[0])
 			_ = f.Read(func(r *tridb.Reader) error {
-				fmt.Println(r.Count(prefix))
+				fmt.Println(r.CountPrefix(prefix))
 				return nil
 			})
 		},
