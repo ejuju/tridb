@@ -79,11 +79,23 @@ func (n *keydirNode) walk(reverse bool, prefix []byte, do func(key []byte, posit
 		}
 	}
 
-	start, end, next := 0, len(n.children)-1, func(i int) int { return i + 1 }
+	// Walk children in reverse order
 	if reverse {
-		start, end, next = len(n.children)-1, 0, func(i int) int { return i - 1 }
+		for c := len(n.children) - 1; c >= 0; c-- {
+			child := n.children[c]
+			if child == nil {
+				continue
+			}
+			err := child.walk(reverse, append(prefix, byte(c)), do)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	for c := start; c != end; c = next(c) {
+
+	// Walk children in order
+	for c := 0; c < len(n.children); c++ {
 		child := n.children[c]
 		if child == nil {
 			continue
