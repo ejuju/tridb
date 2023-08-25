@@ -167,7 +167,7 @@ var commands = []*command{
 		},
 	},
 	{
-		keywords: []string{"has"},
+		keywords: []string{"has", "?"},
 		desc:     "reports whether a key exists",
 		args:     []string{"key"},
 		do: func(f *tridb.File, args ...string) {
