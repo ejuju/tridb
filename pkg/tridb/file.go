@@ -201,6 +201,7 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 			if f.woffset == startOffset {
 				return fmt.Errorf("encode: %w", err)
 			}
+
 			truncErr := os.Truncate(f.fpath, int64(startOffset))
 			if truncErr != nil {
 				panic(fmt.Errorf("file corruption: %w: %w", err, truncErr))
@@ -215,6 +216,7 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 			if f.woffset == startOffset {
 				return fmt.Errorf("write: %w", err)
 			}
+
 			truncErr := os.Truncate(f.fpath, int64(startOffset))
 			if truncErr != nil {
 				panic(fmt.Errorf("file corruption: %w: %w", err, truncErr))
@@ -225,7 +227,7 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		// Update memstate
 		switch row.Op {
 		default:
-			panic(fmt.Errorf("file corruption: unexpected op %q", row.Op))
+			panic("unreachable")
 		case OpSet:
 			f.keydir.set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
