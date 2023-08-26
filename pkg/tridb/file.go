@@ -189,7 +189,7 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 	r, w := &Reader{f: f}, &Writer{}
 	err := do(r, w)
 	if err != nil {
-		return err
+		return err // aborts on error
 	}
 
 	// Write rows to file
@@ -198,30 +198,22 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		// Encode row
 		encoded, err := row.Encode()
 		if err != nil {
-			if f.woffset == startOffset {
-				return fmt.Errorf("encode: %w", err)
+			err = fmt.Errorf("encode: %w", err)
+			if f.woffset != startOffset {
+				f.handleCorruption(err, startOffset)
 			}
-
-			truncErr := os.Truncate(f.fpath, int64(startOffset))
-			if truncErr != nil {
-				panic(fmt.Errorf("file corruption: %w: %w", err, truncErr))
-			}
-			panic(fmt.Errorf("memstate corruption: %w", err))
+			return err
 		}
 
 		// Write row
 		n, err := f.w.Write(encoded)
 		f.woffset += n
 		if err != nil {
-			if f.woffset == startOffset {
-				return fmt.Errorf("write: %w", err)
+			err = fmt.Errorf("write: %w", err)
+			if f.woffset != startOffset {
+				f.handleCorruption(err, startOffset)
 			}
-
-			truncErr := os.Truncate(f.fpath, int64(startOffset))
-			if truncErr != nil {
-				panic(fmt.Errorf("file corruption: %w: %w", err, truncErr))
-			}
-			panic(fmt.Errorf("memstate corruption: %w", err))
+			return err
 		}
 
 		// Update memstate
@@ -238,10 +230,22 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 	// Sync file
 	err = f.w.Sync()
 	if err != nil {
-		panic(fmt.Errorf("sync: file corruption: %w", err))
+		f.handleCorruption(fmt.Errorf("sync: %w", err), startOffset)
 	}
-
 	return nil
+}
+
+// Called when writing more than one row when data was already written to file and memstate updated,
+// we need to recover from the file corruption and panic to restart the server
+// with a clean memstate.
+func (f *File) handleCorruption(err error, size int) {
+	truncErr := os.Truncate(f.fpath, int64(size))
+	if truncErr != nil {
+		// Failed truncation, file is corrupted.
+		panic(fmt.Errorf("file corruption (%d trailing bytes): %w: %w", f.woffset-size, err, truncErr))
+	}
+	// Truncation succeeded, avoided file corruption but memstate is corrupted, only need restart.
+	panic(fmt.Errorf("memstate corruption: %w", err))
 }
 
 // Note: In a read-only transaction,

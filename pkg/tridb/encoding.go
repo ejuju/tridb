@@ -2,6 +2,7 @@ package tridb
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -29,8 +30,8 @@ const (
 
 // Key/value length constrains errors.
 var (
-	ErrKeyTooLong   = fmt.Errorf("key too long")   // Key-length overflows uint8.
-	ErrValueTooLong = fmt.Errorf("value too long") // Value-length overflows uint32.
+	ErrKeyTooLong   = errors.New("key too long")   // Key-length overflows uint8.
+	ErrValueTooLong = errors.New("value too long") // Value-length overflows uint32.
 )
 
 // Validate reports an error if the row key and/or value is too long.
