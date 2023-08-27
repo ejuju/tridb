@@ -189,6 +189,16 @@ var commands = []*command{
 		},
 	},
 	{
+		keywords: []string{"sum-key-size"},
+		desc:     "reports the sum of all keys",
+		do: func(f *tridb.File, args ...string) {
+			_ = f.Read(func(r *tridb.Reader) error {
+				fmt.Println(r.SumKeySize())
+				return nil
+			})
+		},
+	},
+	{
 		keywords: []string{"all"},
 		desc:     "show all unique keys",
 		do: func(f *tridb.File, args ...string) {
@@ -259,9 +269,10 @@ var commands = []*command{
 				return
 			}
 			err = f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
-				for i := 1; i <= num; i++ {
-					key := []byte(strconv.Itoa(i))
-					w.Set(key, append(key, " "+time.Now().Format(time.RFC3339)...))
+				for i := 0; i < num; i++ {
+					key := []byte(fmt.Sprintf("%010d", i))
+					value := []byte(time.Now().Format(time.RFC3339))
+					w.Set(key, value)
 				}
 				return nil
 			})

@@ -70,8 +70,8 @@ func (row *Row) DecodeFrom(r io.Reader) (int, error) {
 	read := 0
 
 	// Read header (op, key-length and value-length)
-	header := make([]byte, 1+1+4)
-	n, err := io.ReadFull(r, header)
+	header := [1 + 1 + 4]byte{}
+	n, err := io.ReadFull(r, header[:])
 	read += n
 	if err != nil {
 		return read, fmt.Errorf("read header: %w", err)

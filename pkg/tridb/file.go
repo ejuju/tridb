@@ -37,7 +37,7 @@ func Open(fpath string) (*File, error) {
 
 	// Reconstruct in-memory state (= keydir: where keys/rows are located in the file)
 	bufr := bufio.NewReader(f.r)
-	row := &Row{}
+	row := Row{}
 	for {
 		// Try to decode row
 		n, err := row.DecodeFrom(bufr)
@@ -53,7 +53,7 @@ func Open(fpath string) (*File, error) {
 		default:
 			return nil, fmt.Errorf("unknown row op %q at offset %d", row.Op, f.woffset)
 		case OpSet:
-			f.keydir.set(row.Key, &rowPosition{Offset: f.woffset - n, Size: n})
+			f.keydir.set(&keydirItem{key: row.Key, position: &rowPosition{offset: f.woffset - n, size: n}})
 		case OpDelete:
 			f.keydir.delete(row.Key)
 		}
@@ -103,10 +103,9 @@ func (f *File) Compact() error {
 	}
 
 	// Write rows to new file
-	c := f.keydir.cursor()
-	for item := c.first(); item != nil; item = c.next() {
-		encodedRow := make([]byte, item.position.Size)
-		_, err := f.r.ReadAt(encodedRow, int64(item.position.Offset))
+	for item := f.keydir.chronoList.first; item != nil; item = item.chronoNext {
+		encodedRow := make([]byte, item.position.size)
+		_, err := f.r.ReadAt(encodedRow, int64(item.position.offset))
 		if err != nil {
 			return fmt.Errorf("read current row: %w", err)
 		}
@@ -115,7 +114,7 @@ func (f *File) Compact() error {
 		if err != nil {
 			return fmt.Errorf("write new row: %w", err)
 		}
-		cleanKeydir.set(item.key, &rowPosition{Offset: cleanOffset - n, Size: n})
+		cleanKeydir.set(&keydirItem{key: item.key, position: &rowPosition{offset: cleanOffset - n, size: n}})
 	}
 	if err != nil {
 		return fmt.Errorf("walk rows: %w", err)
@@ -221,7 +220,7 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		default:
 			panic("unreachable")
 		case OpSet:
-			f.keydir.set(row.Key, &rowPosition{Offset: f.woffset - n, Size: n})
+			f.keydir.set(&keydirItem{key: row.Key, position: &rowPosition{offset: f.woffset - n, size: n}})
 		case OpDelete:
 			f.keydir.delete(row.Key)
 		}
@@ -286,7 +285,7 @@ type Reader struct {
 func (r *Reader) Has(key []byte) bool { return r.f.keydir.ht.get(key) != nil }
 
 // Count returns the number of unique keys in the database.
-func (r *Reader) Count() int { return r.f.keydir.ht.count }
+func (r *Reader) Count() int { return r.f.keydir.ht.numItems }
 
 // Get returns the eventual value associated with the given key,
 // if the key is not found, a nil value is returned.
@@ -297,8 +296,8 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 		return nil, nil
 	}
 	// Read row
-	encodedRow := make([]byte, entry.position.Size)
-	_, err := r.f.r.ReadAt(encodedRow, int64(entry.position.Offset))
+	encodedRow := make([]byte, entry.position.size)
+	_, err := r.f.r.ReadAt(encodedRow, int64(entry.position.offset))
 	if err != nil {
 		return nil, fmt.Errorf("read row: %w", err)
 	}
@@ -312,42 +311,51 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 }
 
 func (r *Reader) Cursor() *Cursor {
-	return &Cursor{r: r, c: r.f.keydir.cursor()}
+	return &Cursor{r: r, chronoList: r.f.keydir.chronoList}
 }
 
 type Cursor struct {
-	r *Reader
-	c *keydirCursor
+	r          *Reader
+	current    *keydirItem
+	chronoList *keydirChronoList
 }
 
 func (c *Cursor) First() []byte {
-	item := c.c.first()
-	if item == nil {
+	c.current = c.chronoList.first
+	if c.current == nil {
 		return nil
 	}
-	return item.key
+	return c.current.key
 }
 
 func (c *Cursor) Last() []byte {
-	item := c.c.last()
-	if item == nil {
+	c.current = c.chronoList.last
+	if c.current == nil {
 		return nil
 	}
-	return item.key
-}
-
-func (c *Cursor) Next() []byte {
-	item := c.c.next()
-	if item == nil {
-		return nil
-	}
-	return item.key
+	return c.current.key
 }
 
 func (c *Cursor) Previous() []byte {
-	item := c.c.previous()
-	if item == nil {
+	c.current = c.current.chronoPrevious
+	if c.current == nil {
 		return nil
 	}
-	return item.key
+	return c.current.key
+}
+
+func (c *Cursor) Next() []byte {
+	c.current = c.current.chronoNext
+	if c.current == nil {
+		return nil
+	}
+	return c.current.key
+}
+
+func (r *Reader) SumKeySize() int {
+	size := 0
+	for item := r.f.keydir.chronoList.first; item != nil; item = item.chronoNext {
+		size += len(item.key)
+	}
+	return size
 }

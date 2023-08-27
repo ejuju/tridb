@@ -9,7 +9,7 @@ Features:
 - [x] Simple log and index design (does not use a B+Tree or LSM, inspired by Riak's Bitcask)
 
 Quirks, limitations and potential gotchas:
-- Keys are stored in memory (in a trie)
+- Keys are stored in memory
 - Max key length is 255
 - Max value length is around 4.2 GB
 - No sub-groups of key-value pairs, everything is in the same "bucket" / "table" / "collection".

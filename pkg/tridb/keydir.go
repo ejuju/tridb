@@ -2,199 +2,171 @@ package tridb
 
 import (
 	"bytes"
-	"fmt"
 )
 
 type keydir struct {
-	ht *keydirHashtable
-	l  *keydirOrderedList
+	ht         *keydirHashTable
+	chronoList *keydirChronoList
 }
 
 type keydirItem struct {
-	key            []byte
-	position       *rowPosition
-	isDeleted      bool // tombstone record for open adressing
-	previous, next *keydirItem
+	key                        []byte
+	position                   *rowPosition
+	chronoPrevious, chronoNext *keydirItem // for iterating over keys in chronological order
+	bucketPrevious, bucketNext *keydirItem // for iterating over a other keys in the same bucket
 }
 
-type rowPosition struct{ Offset, Size int }
+type rowPosition struct{ offset, size int }
 
-func newKeydir(length int) *keydir {
-	return &keydir{ht: newKeydirHashtable(length), l: &keydirOrderedList{}}
+func newKeydir(numBuckets int) *keydir {
+	return &keydir{ht: newKeydirHashtable(numBuckets), chronoList: &keydirChronoList{}}
 }
 
-func (kd *keydir) set(key []byte, position *rowPosition) {
-	item := &keydirItem{key: key, position: position}
-
-	// Delete from ordered list if already exists
-	if existingItem := kd.ht.get(key); existingItem != nil {
-		kd.l.remove(existingItem)
+func (kd *keydir) set(item *keydirItem) {
+	if existingItem := kd.ht.get(item.key); existingItem != nil {
+		kd.chronoList.deref(existingItem) // Delete previous version from chrono list
 	}
-
-	// Record in ordered list
-	kd.l.push(item)
-
-	// Resize hashtable if needed
-	if kd.ht.loadFactor() > 0.5 {
-		kd.ht.resize(len(kd.ht.entries) * 2)
-	}
-
-	// Set item in hashtable
-	kd.ht.set(item)
+	kd.chronoList.append(item) // append to chrono list
+	kd.ht.set(item)            // add to hashtable bucket
 }
 
+// no-op if key not found
 func (kd *keydir) delete(key []byte) {
-	item := kd.ht.get(key)
-	if item == nil {
+	if item := kd.ht.get(key); item != nil {
+		kd.chronoList.deref(item)
+		kd.ht.delete(key)
+	}
+}
+
+type keydirHashTable struct {
+	numItems int
+	buckets  []*keydirHashtableBucket
+}
+
+type keydirHashtableBucket struct {
+	numItemsInBucket int
+	first, last      *keydirItem
+}
+
+const minBuckets = 32 * 1024
+
+func newKeydirHashtable(numBuckets int) *keydirHashTable {
+	if numBuckets <= minBuckets {
+		numBuckets = minBuckets
+	}
+	return &keydirHashTable{buckets: make([]*keydirHashtableBucket, numBuckets)}
+}
+
+func (ht *keydirHashTable) set(item *keydirItem) {
+	ht.numItems++ // optimistic increment
+	bucketIndex := ht.keyToBucketIndexByFNV1A(item.key)
+	bucket := ht.buckets[bucketIndex]
+	if bucket == nil {
+		ht.buckets[bucketIndex] = &keydirHashtableBucket{first: item, last: item, numItemsInBucket: 1}
 		return
 	}
-
-	// Remove item from ordered list
-	kd.l.remove(item)
-
-	// Delete item in hash table and downsize if possible
-	kd.ht.delete(key)
-	if kd.ht.loadFactor() < 0.125 {
-		kd.ht.resize(len(kd.ht.entries) / 2)
+	bucket.numItemsInBucket++ // optimistic increment
+	for existingItem := bucket.first; existingItem != nil; existingItem = existingItem.bucketNext {
+		if bytes.Equal(existingItem.key, item.key) {
+			ht.deleteItem(existingItem, bucketIndex, bucket)
+		}
 	}
+	// Add to end of bucket
+	beforeLast := bucket.last        // get item before later one (currently last)
+	item.bucketPrevious = beforeLast // set later item's previous to current last
+	beforeLast.bucketNext = item     // set current last next item to later item
+	bucket.last = item               // swap global last
 }
 
-type keydirHashtable struct {
-	count   int
-	entries []*keydirItem
-}
-
-func newKeydirHashtable(length int) *keydirHashtable {
-	if length <= 0 {
-		length = 1024
+func (ht *keydirHashTable) delete(key []byte) {
+	bucketIndex := ht.keyToBucketIndexByFNV1A(key)
+	bucket := ht.buckets[bucketIndex]
+	if bucket == nil {
+		return
 	}
-	return &keydirHashtable{
-		entries: make([]*keydirItem, length),
-	}
-}
-
-func hashFNV1a(key []byte) uint64 {
-	const offset, prime = uint64(14695981039346656037), uint64(1099511628211)
-	hash := offset
-	for _, char := range key {
-		hash *= prime
-		hash ^= uint64(char)
-	}
-	return hash
-}
-
-func (ht *keydirHashtable) hash(key []byte) int { return int(hashFNV1a(key) % uint64(len(ht.entries))) }
-
-func (ht *keydirHashtable) loadFactor() float64 { return float64(ht.count) / float64(len(ht.entries)) }
-
-func (ht *keydirHashtable) resize(length int) {
-	newHT := newKeydirHashtable(length)
-	for _, entry := range ht.entries {
-		if entry == nil {
-			continue
-		}
-		newHT.set(entry)
-	}
-	*ht = *newHT
-}
-
-func (ht *keydirHashtable) set(item *keydirItem) {
-	index := ht.hash(item.key)
-	if ht.count >= len(ht.entries) {
-		err := fmt.Errorf("hashtable overflow: %d/%d", ht.count, len(ht.entries))
-		panic(err)
-	}
-
-	isNew := true
-	for ; ; index++ {
-		if index >= len(ht.entries) {
-			index = 0
-		}
-		existingItem := ht.entries[index]
-		if existingItem == nil {
-			break // found available index
-		}
-		isSameKey := bytes.Equal(existingItem.key, item.key)
-		if isSameKey && !existingItem.isDeleted {
-			isNew = false
-		}
-		if isSameKey {
-			break // found existing index
-		}
-		continue // Go to next index (tombstone or different key)
-	}
-	ht.entries[index] = item
-	if isNew {
-		ht.count++
-	}
-}
-
-func (ht *keydirHashtable) delete(key []byte) {
-	for index := ht.hash(key); true; index++ {
-		if index >= len(ht.entries) {
-			index = 0
-		}
-		item := ht.entries[index]
-		if item == nil {
-			return
-		} else if bytes.Equal(key, item.key) && !item.isDeleted {
-			ht.count--            // Decrease counter
-			item.isDeleted = true // Set tombstone record
+	for existingItem := bucket.first; existingItem != nil; existingItem = existingItem.chronoNext {
+		if bytes.Equal(existingItem.key, key) {
+			ht.deleteItem(existingItem, bucketIndex, bucket)
 			return
 		}
 	}
 }
 
-func (ht *keydirHashtable) get(key []byte) *keydirItem {
-	for index := ht.hash(key); true; index++ {
-		if index >= len(ht.entries) {
-			index = 0
-		}
-		item := ht.entries[index]
-		if item == nil {
-			break // key not found
-		} else if bytes.Equal(key, item.key) && !item.isDeleted {
-			return item
+func (ht *keydirHashTable) deleteItem(existingItem *keydirItem, bucketIndex int, bucket *keydirHashtableBucket) {
+	ht.numItems--
+	bucket.numItemsInBucket--
+	if bucket.numItemsInBucket == 0 {
+		ht.buckets[bucketIndex] = nil // Remove whole bucket if no more keys left
+	} else {
+		ht.deref(existingItem, bucket) // Remove all references to this item in the bucket
+	}
+}
+
+func (ht *keydirHashTable) get(key []byte) *keydirItem {
+	bucket := ht.buckets[ht.keyToBucketIndexByFNV1A(key)]
+	if bucket == nil {
+		return nil
+	}
+	for bucketItem := bucket.first; bucketItem != nil; bucketItem = bucketItem.chronoNext {
+		if bytes.Equal(bucketItem.key, key) {
+			return bucketItem
 		}
 	}
 	return nil
 }
 
-type keydirOrderedList struct {
+func (ht *keydirHashTable) deref(existingItem *keydirItem, bucket *keydirHashtableBucket) {
+	if existingItem == bucket.first {
+		bucket.first = existingItem.chronoNext
+	} else {
+		existingItem.chronoPrevious.chronoNext = existingItem.chronoNext
+	}
+	if existingItem == bucket.last {
+		bucket.last = existingItem.chronoPrevious
+	} else {
+		existingItem.chronoNext.chronoPrevious = existingItem.chronoPrevious
+	}
+}
+
+func (ht *keydirHashTable) keyToBucketIndexByFNV1A(key []byte) int {
+	const offset, prime = uint64(14695981039346656037), uint64(1099511628211) // fnv-1a constants
+	hash := offset
+	for _, char := range key {
+		hash *= prime
+		hash ^= uint64(char)
+	}
+	index := int(hash % uint64(len(ht.buckets)))
+	return index
+}
+
+func (ht *keydirHashTable) loadFactor() float64 {
+	return float64(ht.numItems) / float64(len(ht.buckets))
+}
+
+type keydirChronoList struct {
 	first, last *keydirItem
 }
 
-func (l *keydirOrderedList) push(item *keydirItem) {
-	item.previous = l.last
+func (l *keydirChronoList) append(item *keydirItem) {
+	item.chronoPrevious = l.last
 	if l.first == nil {
 		l.first = item // set first item if needed
 	}
 	if l.last != nil {
-		l.last.next = item // set previous item's next item (if not first item)
+		l.last.chronoNext = item // set previous item's next item (if not first item)
 	}
 	l.last = item // set last item to this
 }
 
-func (l *keydirOrderedList) remove(item *keydirItem) {
-	if item.previous == nil {
-		l.first = item.next
+func (l *keydirChronoList) deref(item *keydirItem) {
+	if item.chronoPrevious == nil {
+		l.first = item.chronoNext
 	} else {
-		item.previous.next = item.next
+		item.chronoPrevious.chronoNext = item.chronoNext
 	}
-	if item.next == nil {
-		l.last = item.previous
+	if item.chronoNext == nil {
+		l.last = item.chronoPrevious
 	} else {
-		item.next.previous = item.previous
+		item.chronoNext.chronoPrevious = item.chronoPrevious
 	}
 }
-
-type keydirCursor struct {
-	l       *keydirOrderedList
-	current *keydirItem
-}
-
-func (kd *keydir) cursor() *keydirCursor      { return &keydirCursor{l: kd.l, current: kd.l.last} }
-func (c *keydirCursor) first() *keydirItem    { c.current = c.l.first; return c.current }
-func (c *keydirCursor) last() *keydirItem     { c.current = c.l.last; return c.current }
-func (c *keydirCursor) previous() *keydirItem { c.current = c.current.previous; return c.current }
-func (c *keydirCursor) next() *keydirItem     { c.current = c.current.next; return c.current }
