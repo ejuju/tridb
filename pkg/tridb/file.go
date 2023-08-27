@@ -21,7 +21,7 @@ type File struct {
 
 // Open opens the database file.
 func Open(fpath string) (*File, error) {
-	f := &File{fpath: fpath, keydir: newKeydir()}
+	f := &File{fpath: fpath, keydir: newKeydir(0)}
 
 	// Remove file possibly left over from a crash during last compaction.
 	err := f.EnsureNoCompactingFile()
@@ -55,7 +55,7 @@ func Open(fpath string) (*File, error) {
 		case OpSet:
 			f.keydir.set(row.Key, &rowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
-			f.keydir.remove(row.Key)
+			f.keydir.delete(row.Key)
 		}
 	}
 
@@ -95,7 +95,7 @@ func (f *File) Compact() error {
 	}
 
 	// Init new file
-	cleanKeydir := newKeydir()
+	cleanKeydir := newKeydir(0)
 	cleanOffset := 0
 	cleanR, cleanW, err := openFileRW(f.fpath + CompactingFileExtension)
 	if err != nil {
@@ -223,7 +223,7 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		case OpSet:
 			f.keydir.set(row.Key, &rowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
-			f.keydir.remove(row.Key)
+			f.keydir.delete(row.Key)
 		}
 	}
 
@@ -283,22 +283,22 @@ type Reader struct {
 }
 
 // Has reports whether a key is known.
-func (r *Reader) Has(key []byte) bool { return r.f.keydir.get(key) != nil }
+func (r *Reader) Has(key []byte) bool { return r.f.keydir.ht.get(key) != nil }
 
 // Count returns the number of unique keys in the database.
-func (r *Reader) Count() int { return r.f.keydir.count() }
+func (r *Reader) Count() int { return r.f.keydir.ht.count }
 
 // Get returns the eventual value associated with the given key,
 // if the key is not found, a nil value is returned.
 // If an error is returned, it is internal (failed OS read or decoding).
 func (r *Reader) Get(key []byte) ([]byte, error) {
-	position := r.f.keydir.get(key)
-	if position == nil {
+	entry := r.f.keydir.ht.get(key)
+	if entry == nil {
 		return nil, nil
 	}
 	// Read row
-	encodedRow := make([]byte, position.Size)
-	_, err := r.f.r.ReadAt(encodedRow, int64(position.Offset))
+	encodedRow := make([]byte, entry.position.Size)
+	_, err := r.f.r.ReadAt(encodedRow, int64(entry.position.Offset))
 	if err != nil {
 		return nil, fmt.Errorf("read row: %w", err)
 	}
