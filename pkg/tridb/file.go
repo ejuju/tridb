@@ -12,16 +12,20 @@ import (
 
 // File holds key-value pairs.
 type File struct {
-	mu      sync.RWMutex
-	fpath   string
-	keydir  *keydir
-	r, w    *os.File
-	woffset int
+	mu        sync.RWMutex
+	fpath     string
+	newKeydir func() Keydir
+	keydir    Keydir
+	r, w      *os.File
+	woffset   int
 }
 
 // Open opens the database file.
-func Open(fpath string) (*File, error) {
-	f := &File{fpath: fpath, keydir: &keydir{root: &keydirNode{}}}
+func Open(fpath string, newKeydir func() Keydir) (*File, error) {
+	if newKeydir == nil {
+		newKeydir = func() Keydir { return NewTrieKeydir() }
+	}
+	f := &File{fpath: fpath, keydir: newKeydir(), newKeydir: newKeydir}
 
 	// Remove file possibly left over from a crash during last compaction.
 	err := f.EnsureNoCompactingFile()
@@ -53,9 +57,9 @@ func Open(fpath string) (*File, error) {
 		default:
 			return nil, fmt.Errorf("unknown row op %q at offset %d", row.Op, f.woffset)
 		case OpSet:
-			f.keydir.set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
+			f.keydir.Set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
-			f.keydir.delete(row.Key)
+			f.keydir.Delete(row.Key)
 		}
 	}
 
@@ -95,26 +99,26 @@ func (f *File) Compact() error {
 	}
 
 	// Init new file
-	newKeymap := &keydir{root: &keydirNode{}}
-	newOffset := 0
-	newR, newW, err := openFileRW(f.fpath + CompactingFileExtension)
+	cleanKeydir := f.newKeydir()
+	cleanOffset := 0
+	cleanR, cleanW, err := openFileRW(f.fpath + CompactingFileExtension)
 	if err != nil {
 		return fmt.Errorf("open new datafile: %w", err)
 	}
 
 	// Write rows to new file
-	err = f.keydir.walk(nil, func(key []byte, position *RowPosition) error {
+	err = f.keydir.Walk(nil, func(key []byte, position *RowPosition) error {
 		encodedRow := make([]byte, position.Size)
 		_, err := f.r.ReadAt(encodedRow, int64(position.Offset))
 		if err != nil {
 			return fmt.Errorf("read current row: %w", err)
 		}
-		n, err := newW.Write(encodedRow)
-		newOffset += n
+		n, err := cleanW.Write(encodedRow)
+		cleanOffset += n
 		if err != nil {
 			return fmt.Errorf("write new row: %w", err)
 		}
-		newKeymap.set(key, &RowPosition{Offset: newOffset - n, Size: n})
+		cleanKeydir.Set(key, &RowPosition{Offset: cleanOffset - n, Size: n})
 		return nil
 	})
 	if err != nil {
@@ -122,7 +126,7 @@ func (f *File) Compact() error {
 	}
 
 	// Sync new file
-	err = newW.Sync()
+	err = cleanW.Sync()
 	if err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
@@ -134,13 +138,13 @@ func (f *File) Compact() error {
 	}
 
 	// Replace old file with new
-	err = os.Rename(newR.Name(), f.fpath)
+	err = os.Rename(cleanR.Name(), f.fpath)
 	if err != nil {
 		return fmt.Errorf("swap: %w", err)
 	}
-	f.keydir = newKeymap
-	f.r, f.w = newR, newW
-	f.woffset = newOffset
+	f.keydir = cleanKeydir
+	f.r, f.w = cleanR, cleanW
+	f.woffset = cleanOffset
 	return nil
 }
 
@@ -221,9 +225,9 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		default:
 			panic("unreachable")
 		case OpSet:
-			f.keydir.set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
+			f.keydir.Set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
-			f.keydir.delete(row.Key)
+			f.keydir.Delete(row.Key)
 		}
 	}
 
@@ -279,13 +283,13 @@ func (w *Writer) Delete(key []byte) {
 type Reader struct{ f *File }
 
 // Has reports whether a key is known.
-func (r *Reader) Has(key []byte) bool { return r.f.keydir.get(key) != nil }
+func (r *Reader) Has(key []byte) bool { return r.f.keydir.Get(key) != nil }
 
 // Get returns the eventual value associated with the given key,
 // if the key is not found, a nil value is returned.
 // If an error is returned, it is internal (failed OS read or decoding).
 func (r *Reader) Get(key []byte) ([]byte, error) {
-	position := r.f.keydir.get(key)
+	position := r.f.keydir.Get(key)
 	if position == nil {
 		return nil, nil
 	}
@@ -297,12 +301,12 @@ func (r *Reader) Get(key []byte) ([]byte, error) {
 }
 
 // Count returns the number of unique keys in the database.
-func (r *Reader) Count() int { return r.f.keydir.count }
+func (r *Reader) Count() int { return r.f.keydir.Count() }
 
 // Count prefix returns the number of unique keys with the given prefix.
 func (r *Reader) CountPrefix(prefix []byte) int {
 	count := 0
-	_ = r.f.keydir.walk(&WalkOptions{Prefix: prefix}, func(key []byte, position *RowPosition) error {
+	_ = r.f.keydir.Walk(&WalkOptions{Prefix: prefix}, func(key []byte, position *RowPosition) error {
 		count++
 		return nil
 	})
@@ -314,7 +318,7 @@ func (r *Reader) CountPrefix(prefix []byte) int {
 //
 // Note: The returned error can only originate from the callback.
 func (r *Reader) Walk(opts *WalkOptions, do func(key []byte) error) error {
-	return r.f.keydir.walk(opts, func(key []byte, _ *RowPosition) error { return do(key) })
+	return r.f.keydir.Walk(opts, func(key []byte, _ *RowPosition) error { return do(key) })
 }
 
 // WalkWithValue iterates over the key-value pairs in the database.
@@ -323,7 +327,7 @@ func (r *Reader) Walk(opts *WalkOptions, do func(key []byte) error) error {
 //
 // Basically like Walk but the callback also gets the value associated with the key.
 func (r *Reader) WalkWithValue(opts *WalkOptions, do func(key, value []byte) error) error {
-	return r.f.keydir.walk(opts, func(key []byte, position *RowPosition) error {
+	return r.f.keydir.Walk(opts, func(key []byte, position *RowPosition) error {
 		row, err := r.readAndDecode(position)
 		if err != nil {
 			return err

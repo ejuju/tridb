@@ -24,7 +24,7 @@ func main() {
 	}
 
 	start := time.Now()
-	f, err := tridb.Open(os.Args[1])
+	f, err := tridb.Open(os.Args[1], func() tridb.Keydir { return tridb.NewOrderedMap() })
 	if err != nil {
 		log.Println(err)
 		return
@@ -240,8 +240,14 @@ var commands = []*command{
 
 			err = f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
 				for i := 0; i < num; i++ {
+					// key := make([]byte, 4)
+					// _, err := rand.Read(key)
+					// if err != nil {
+					// 	panic(err)
+					// }
+					// key = []byte(hex.EncodeToString(key))
 					key := []byte(strconv.Itoa(i))
-					w.Set(key, []byte(time.Now().Format(time.RFC3339)))
+					w.Set(key, []byte(strconv.Itoa(i)+" "+time.Now().Format(time.RFC3339)))
 				}
 				return nil
 			})

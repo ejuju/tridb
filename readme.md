@@ -25,6 +25,7 @@ References:
 - https://riak.com/assets/bitcask-intro.pdf
 
 Roadmap:
+- Detect/handle file corruption (when write operation is interrupted by OS / sudden shutdown)
 - Indexing support
 - Use as remote server
 - Support replication

@@ -6,13 +6,13 @@ import (
 
 func TestKeydir(t *testing.T) {
 	t.Run("iterate over keys in lexicographical order", func(t *testing.T) {
-		keydir := &keydir{root: &keydirNode{}}
-		keydir.set([]byte("c"), &RowPosition{})
-		keydir.set([]byte("b"), &RowPosition{})
-		keydir.set([]byte("a"), &RowPosition{})
+		keydir := NewTrieKeydir()
+		keydir.Set([]byte("c"), &RowPosition{})
+		keydir.Set([]byte("b"), &RowPosition{})
+		keydir.Set([]byte("a"), &RowPosition{})
 		wantKeys := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
 		gotKeys := [][]byte{}
-		_ = keydir.walk(nil, func(key []byte, position *RowPosition) error {
+		_ = keydir.Walk(nil, func(key []byte, position *RowPosition) error {
 			gotKeys = append(gotKeys, key)
 			return nil
 		})
@@ -24,13 +24,13 @@ func TestKeydir(t *testing.T) {
 	})
 
 	t.Run("iterate over keys in reverse order", func(t *testing.T) {
-		keydir := &keydir{root: &keydirNode{}}
-		keydir.set([]byte("a"), &RowPosition{})
-		keydir.set([]byte("b"), &RowPosition{})
-		keydir.set([]byte("c"), &RowPosition{})
+		keydir := NewTrieKeydir()
+		keydir.Set([]byte("a"), &RowPosition{})
+		keydir.Set([]byte("b"), &RowPosition{})
+		keydir.Set([]byte("c"), &RowPosition{})
 		wantKeys := [][]byte{[]byte("c"), []byte("b"), []byte("a")}
 		gotKeys := [][]byte{}
-		_ = keydir.walk(&WalkOptions{Reverse: true}, func(key []byte, position *RowPosition) error {
+		_ = keydir.Walk(&WalkOptions{Reverse: true}, func(key []byte, position *RowPosition) error {
 			gotKeys = append(gotKeys, key)
 			return nil
 		})

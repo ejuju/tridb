@@ -9,7 +9,7 @@ import (
 
 func main() {
 	// Open the database file
-	f, err := tridb.Open("main.tridb")
+	f, err := tridb.Open("main.tridb", nil)
 	if err != nil {
 		panic(err)
 	}
