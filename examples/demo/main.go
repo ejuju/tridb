@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"log"
 
 	"github.com/ejuju/tridb/pkg/tridb"
@@ -9,7 +8,7 @@ import (
 
 func main() {
 	// Open the database file
-	f, err := tridb.Open("main.tridb", nil)
+	f, err := tridb.Open("main.tridb")
 	if err != nil {
 		panic(err)
 	}
@@ -62,9 +61,8 @@ func main() {
 
 	// Count the number of unique keys
 	_ = f.Read(func(r *tridb.Reader) error {
-		num := r.Count()                              // Count all unique keys
-		numWithPrefix := r.CountPrefix([]byte("my-")) // Count unique keys with prefix
-		log.Println(num, numWithPrefix)
+		num := r.Count() // Count all unique keys
+		log.Println(num)
 		return nil
 	})
 	if err != nil {
@@ -72,57 +70,13 @@ func main() {
 	}
 
 	// Iterate over keys
-	//
-	// Note: return an error if you want to stop iterating early.
 	_ = f.Read(func(r *tridb.Reader) error {
-		// Iterate over all unique keys (in lexicographical order)
-		_ = r.Walk(nil, func(key []byte) error {
+		c := r.Cursor()
+		for key := c.Last(); key != nil; c.Previous() {
 			log.Println(key)
-			return nil
-		})
-
-		// Iterate over all unique keys (in reverse lexicographical order)
-		_ = r.Walk(&tridb.WalkOptions{Reverse: true}, func(key []byte) error {
-			log.Println(key)
-			return nil
-		})
-
-		// Iterate over keys with a given prefix
-		_ = r.Walk(&tridb.WalkOptions{Prefix: []byte("my-")}, func(key []byte) error {
-			log.Println(key)
-			return nil
-		})
-
-		// Iterate over all keys and (current) values (in lexicographical order)
-		_ = r.WalkWithValue(nil, func(key, value []byte) error {
-			log.Println(key, value)
-			return nil
-		})
-
+		}
 		return nil
 	})
-
-	// Pagination
-	items := []string{}
-	err = f.Read(func(r *tridb.Reader) error {
-		page := 42         // arbitrary user defined input
-		itemsPerPage := 10 // arbitrary user defined input
-		offset := page * itemsPerPage
-		i := -1
-		return r.Walk(nil, func(key []byte) error {
-			i++
-			if i > offset+itemsPerPage {
-				return tridb.ErrBreak
-			} else if i < offset {
-				return nil
-			}
-			items = append(items, string(key))
-			return nil
-		})
-	})
-	if err != nil && !errors.Is(err, tridb.ErrBreak) {
-		panic(err)
-	}
 }
 
 func init() {

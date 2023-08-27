@@ -12,20 +12,16 @@ import (
 
 // File holds key-value pairs.
 type File struct {
-	mu        sync.RWMutex
-	fpath     string
-	newKeydir func() Keydir
-	keydir    Keydir
-	r, w      *os.File
-	woffset   int
+	mu      sync.RWMutex
+	fpath   string
+	keydir  *keydir
+	r, w    *os.File
+	woffset int
 }
 
 // Open opens the database file.
-func Open(fpath string, newKeydir func() Keydir) (*File, error) {
-	if newKeydir == nil {
-		newKeydir = func() Keydir { return NewTrieKeydir() }
-	}
-	f := &File{fpath: fpath, keydir: newKeydir(), newKeydir: newKeydir}
+func Open(fpath string) (*File, error) {
+	f := &File{fpath: fpath, keydir: newKeydir()}
 
 	// Remove file possibly left over from a crash during last compaction.
 	err := f.EnsureNoCompactingFile()
@@ -57,9 +53,9 @@ func Open(fpath string, newKeydir func() Keydir) (*File, error) {
 		default:
 			return nil, fmt.Errorf("unknown row op %q at offset %d", row.Op, f.woffset)
 		case OpSet:
-			f.keydir.Set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
+			f.keydir.set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
-			f.keydir.Delete(row.Key)
+			f.keydir.remove(row.Key)
 		}
 	}
 
@@ -99,7 +95,7 @@ func (f *File) Compact() error {
 	}
 
 	// Init new file
-	cleanKeydir := f.newKeydir()
+	cleanKeydir := newKeydir()
 	cleanOffset := 0
 	cleanR, cleanW, err := openFileRW(f.fpath + CompactingFileExtension)
 	if err != nil {
@@ -107,9 +103,10 @@ func (f *File) Compact() error {
 	}
 
 	// Write rows to new file
-	err = f.keydir.Walk(nil, func(key []byte, position *RowPosition) error {
-		encodedRow := make([]byte, position.Size)
-		_, err := f.r.ReadAt(encodedRow, int64(position.Offset))
+	c := f.keydir.cursor()
+	for item := c.first(); item != nil; item = c.next() {
+		encodedRow := make([]byte, item.position.Size)
+		_, err := f.r.ReadAt(encodedRow, int64(item.position.Offset))
 		if err != nil {
 			return fmt.Errorf("read current row: %w", err)
 		}
@@ -118,9 +115,8 @@ func (f *File) Compact() error {
 		if err != nil {
 			return fmt.Errorf("write new row: %w", err)
 		}
-		cleanKeydir.Set(key, &RowPosition{Offset: cleanOffset - n, Size: n})
-		return nil
-	})
+		cleanKeydir.set(item.key, &RowPosition{Offset: cleanOffset - n, Size: n})
+	}
 	if err != nil {
 		return fmt.Errorf("walk rows: %w", err)
 	}
@@ -225,9 +221,9 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		default:
 			panic("unreachable")
 		case OpSet:
-			f.keydir.Set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
+			f.keydir.set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
-			f.keydir.Delete(row.Key)
+			f.keydir.remove(row.Key)
 		}
 	}
 
@@ -264,7 +260,9 @@ func (f *File) Read(do func(r *Reader) error) error {
 }
 
 // Writer holds write operations executed in a write transaction.
-type Writer struct{ rows []*Row }
+type Writer struct {
+	rows []*Row
+}
 
 // Set adds a new key-value pair to the database.
 // Any previous key-value will be overwritten during the next compaction.
@@ -280,63 +278,24 @@ func (w *Writer) Delete(key []byte) {
 }
 
 // Reader can read rows from the database in a read transaction.
-type Reader struct{ f *File }
+type Reader struct {
+	f *File
+}
 
 // Has reports whether a key is known.
-func (r *Reader) Has(key []byte) bool { return r.f.keydir.Get(key) != nil }
+func (r *Reader) Has(key []byte) bool { return r.f.keydir.get(key) != nil }
+
+// Count returns the number of unique keys in the database.
+func (r *Reader) Count() int { return r.f.keydir.count() }
 
 // Get returns the eventual value associated with the given key,
 // if the key is not found, a nil value is returned.
 // If an error is returned, it is internal (failed OS read or decoding).
 func (r *Reader) Get(key []byte) ([]byte, error) {
-	position := r.f.keydir.Get(key)
+	position := r.f.keydir.get(key)
 	if position == nil {
 		return nil, nil
 	}
-	row, err := r.readAndDecode(position)
-	if err != nil {
-		return nil, err
-	}
-	return row.Value, nil
-}
-
-// Count returns the number of unique keys in the database.
-func (r *Reader) Count() int { return r.f.keydir.Count() }
-
-// Count prefix returns the number of unique keys with the given prefix.
-func (r *Reader) CountPrefix(prefix []byte) int {
-	count := 0
-	_ = r.f.keydir.Walk(&WalkOptions{Prefix: prefix}, func(key []byte, position *RowPosition) error {
-		count++
-		return nil
-	})
-	return count
-}
-
-// Walk iterates over the keys in the database.
-// It stops iterating if an error is returned in the callback.
-//
-// Note: The returned error can only originate from the callback.
-func (r *Reader) Walk(opts *WalkOptions, do func(key []byte) error) error {
-	return r.f.keydir.Walk(opts, func(key []byte, _ *RowPosition) error { return do(key) })
-}
-
-// WalkWithValue iterates over the key-value pairs in the database.
-// It stops iterating if an error is returned in the callback.
-// If you only need to access keys but not the value, use Walk instead.
-//
-// Basically like Walk but the callback also gets the value associated with the key.
-func (r *Reader) WalkWithValue(opts *WalkOptions, do func(key, value []byte) error) error {
-	return r.f.keydir.Walk(opts, func(key []byte, position *RowPosition) error {
-		row, err := r.readAndDecode(position)
-		if err != nil {
-			return err
-		}
-		return do(key, row.Value)
-	})
-}
-
-func (r *Reader) readAndDecode(position *RowPosition) (*Row, error) {
 	// Read row
 	encodedRow := make([]byte, position.Size)
 	_, err := r.f.r.ReadAt(encodedRow, int64(position.Offset))
@@ -349,9 +308,46 @@ func (r *Reader) readAndDecode(position *RowPosition) (*Row, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode row: %w", err)
 	}
-	return row, nil
+	return row.Value, nil
 }
 
-// ErrBreak is an error that can be used to abort a read-write transaction or exit a walk.
-// It is only declared for convenience, it does nothing special.
-var ErrBreak = errors.New("break")
+func (r *Reader) Cursor() *Cursor {
+	return &Cursor{r: r, c: r.f.keydir.cursor()}
+}
+
+type Cursor struct {
+	r *Reader
+	c *keydirCursor
+}
+
+func (c *Cursor) First() []byte {
+	item := c.c.first()
+	if item == nil {
+		return nil
+	}
+	return item.key
+}
+
+func (c *Cursor) Last() []byte {
+	item := c.c.last()
+	if item == nil {
+		return nil
+	}
+	return item.key
+}
+
+func (c *Cursor) Next() []byte {
+	item := c.c.next()
+	if item == nil {
+		return nil
+	}
+	return item.key
+}
+
+func (c *Cursor) Previous() []byte {
+	item := c.c.previous()
+	if item == nil {
+		return nil
+	}
+	return item.key
+}

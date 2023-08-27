@@ -31,3 +31,7 @@ Roadmap:
 - Support replication
 - Web GUI
 - Better REPL
+
+Design considerations for keydir:
+- Trie (suitable for text, takes a lot of space in memory, can sort lexicographically)
+- Doubly-linked list + hashtable (takes little memory, can sort chronologically)

@@ -24,7 +24,7 @@ func main() {
 	}
 
 	start := time.Now()
-	f, err := tridb.Open(os.Args[1], func() tridb.Keydir { return tridb.NewOrderedMap() })
+	f, err := tridb.Open(os.Args[1])
 	if err != nil {
 		log.Println(err)
 		return
@@ -189,40 +189,38 @@ var commands = []*command{
 		},
 	},
 	{
-		keywords: []string{"count-prefix"},
-		desc:     "reports the number of unique keys with the given prefix",
-		args:     []string{"prefix"},
+		keywords: []string{"all"},
+		desc:     "show all unique keys",
 		do: func(f *tridb.File, args ...string) {
-			prefix := []byte(args[0])
 			_ = f.Read(func(r *tridb.Reader) error {
-				fmt.Println(r.CountPrefix(prefix))
+				c := r.Cursor()
+				for key := c.Last(); key != nil; key = c.Previous() {
+					fmt.Printf("%q\n", key)
+				}
 				return nil
 			})
 		},
 	},
 	{
-		keywords: []string{"all"},
-		desc:     "show all unique keys",
+		keywords: []string{"tail"},
+		desc:     "show last 10 key-value pairs",
 		do: func(f *tridb.File, args ...string) {
 			_ = f.Read(func(r *tridb.Reader) error {
-				return r.Walk(nil, func(key []byte) error {
-					fmt.Printf("%q\n", key)
-					return nil
-				})
-			})
-		},
-	},
-	{
-		keywords: []string{"all-prefix"},
-		desc:     "show all unique keys",
-		args:     []string{"prefix"},
-		do: func(f *tridb.File, args ...string) {
-			prefix := []byte(args[0])
-			_ = f.Read(func(r *tridb.Reader) error {
-				return r.Walk(&tridb.WalkOptions{Prefix: prefix}, func(key []byte) error {
-					fmt.Printf("%q\n", key)
-					return nil
-				})
+				c := r.Cursor()
+				i := 0
+				for key := c.Last(); key != nil; key = c.Previous() {
+					if i >= 10 {
+						break
+					}
+					i++
+					v, err := r.Get(key)
+					if err != nil {
+						fmt.Println(err)
+						return nil
+					}
+					fmt.Printf("%q = %q\n", key, v)
+				}
+				return nil
 			})
 		},
 	},
@@ -239,15 +237,9 @@ var commands = []*command{
 			}
 
 			err = f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
-				for i := 0; i < num; i++ {
-					// key := make([]byte, 4)
-					// _, err := rand.Read(key)
-					// if err != nil {
-					// 	panic(err)
-					// }
-					// key = []byte(hex.EncodeToString(key))
+				for i := 1; i <= num; i++ {
 					key := []byte(strconv.Itoa(i))
-					w.Set(key, []byte(strconv.Itoa(i)+" "+time.Now().Format(time.RFC3339)))
+					w.Set(key, append(key, " "+time.Now().Format(time.RFC3339)...))
 				}
 				return nil
 			})
