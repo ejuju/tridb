@@ -1,7 +1,5 @@
 package tridb
 
-type RowPosition struct{ Offset, Size int }
-
 type keydir struct {
 	hashtable   map[string]*keydirItem
 	first, last *keydirItem
@@ -9,15 +7,15 @@ type keydir struct {
 
 type keydirItem struct {
 	key            []byte
-	position       *RowPosition
+	position       *rowPosition
 	previous, next *keydirItem
 }
 
-func newKeydir() *keydir {
-	return &keydir{hashtable: make(map[string]*keydirItem)}
-}
+type rowPosition struct{ Offset, Size int }
 
-func (kd *keydir) set(key []byte, position *RowPosition) {
+func newKeydir() *keydir { return &keydir{hashtable: make(map[string]*keydirItem)} }
+
+func (kd *keydir) set(key []byte, position *rowPosition) {
 	item := &keydirItem{key: key, position: position, previous: kd.last}
 	if kd.first == nil && kd.last == nil {
 		kd.first, kd.last = item, item // first item
@@ -34,8 +32,6 @@ func (kd *keydir) remove(key []byte) {
 	if !ok {
 		return
 	}
-	delete(kd.hashtable, string(key))
-
 	if item.previous == nil {
 		kd.first = item.next
 	} else {
@@ -46,11 +42,12 @@ func (kd *keydir) remove(key []byte) {
 	} else {
 		item.next.previous = item.previous
 	}
+	delete(kd.hashtable, string(key))
 }
 
 func (kd *keydir) count() int { return len(kd.hashtable) }
 
-func (kd *keydir) get(key []byte) *RowPosition {
+func (kd *keydir) get(key []byte) *rowPosition {
 	item, ok := kd.hashtable[string(key)]
 	if !ok {
 		return nil
@@ -58,35 +55,13 @@ func (kd *keydir) get(key []byte) *RowPosition {
 	return item.position
 }
 
-func (kd *keydir) cursor() *keydirCursor { return &keydirCursor{kd: kd, current: kd.last} }
-
 type keydirCursor struct {
 	kd      *keydir
 	current *keydirItem
 }
 
-func (c *keydirCursor) first() *keydirItem {
-	c.current = c.kd.first
-	return c.current
-}
-
-func (c *keydirCursor) last() *keydirItem {
-	c.current = c.kd.last
-	return c.current
-}
-
-func (c *keydirCursor) previous() *keydirItem {
-	if c.current == nil {
-		return nil
-	}
-	c.current = c.current.previous
-	return c.current
-}
-
-func (c *keydirCursor) next() *keydirItem {
-	if c.current == nil {
-		return nil
-	}
-	c.current = c.current.next
-	return c.current
-}
+func (kd *keydir) cursor() *keydirCursor      { return &keydirCursor{kd: kd, current: kd.last} }
+func (c *keydirCursor) first() *keydirItem    { c.current = c.kd.first; return c.current }
+func (c *keydirCursor) last() *keydirItem     { c.current = c.kd.last; return c.current }
+func (c *keydirCursor) previous() *keydirItem { c.current = c.current.previous; return c.current }
+func (c *keydirCursor) next() *keydirItem     { c.current = c.current.next; return c.current }

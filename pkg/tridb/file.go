@@ -53,7 +53,7 @@ func Open(fpath string) (*File, error) {
 		default:
 			return nil, fmt.Errorf("unknown row op %q at offset %d", row.Op, f.woffset)
 		case OpSet:
-			f.keydir.set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
+			f.keydir.set(row.Key, &rowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
 			f.keydir.remove(row.Key)
 		}
@@ -115,7 +115,7 @@ func (f *File) Compact() error {
 		if err != nil {
 			return fmt.Errorf("write new row: %w", err)
 		}
-		cleanKeydir.set(item.key, &RowPosition{Offset: cleanOffset - n, Size: n})
+		cleanKeydir.set(item.key, &rowPosition{Offset: cleanOffset - n, Size: n})
 	}
 	if err != nil {
 		return fmt.Errorf("walk rows: %w", err)
@@ -221,7 +221,7 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		default:
 			panic("unreachable")
 		case OpSet:
-			f.keydir.set(row.Key, &RowPosition{Offset: f.woffset - n, Size: n})
+			f.keydir.set(row.Key, &rowPosition{Offset: f.woffset - n, Size: n})
 		case OpDelete:
 			f.keydir.remove(row.Key)
 		}

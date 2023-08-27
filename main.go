@@ -203,12 +203,35 @@ var commands = []*command{
 	},
 	{
 		keywords: []string{"tail"},
-		desc:     "show last 10 key-value pairs",
+		desc:     "show the last 10 key-value pairs",
 		do: func(f *tridb.File, args ...string) {
 			_ = f.Read(func(r *tridb.Reader) error {
 				c := r.Cursor()
 				i := 0
 				for key := c.Last(); key != nil; key = c.Previous() {
+					if i >= 10 {
+						break
+					}
+					i++
+					v, err := r.Get(key)
+					if err != nil {
+						fmt.Println(err)
+						return nil
+					}
+					fmt.Printf("%q = %q\n", key, v)
+				}
+				return nil
+			})
+		},
+	},
+	{
+		keywords: []string{"head"},
+		desc:     "show the first 10 key-value pairs",
+		do: func(f *tridb.File, args ...string) {
+			_ = f.Read(func(r *tridb.Reader) error {
+				c := r.Cursor()
+				i := 0
+				for key := c.First(); key != nil; key = c.Next() {
 					if i >= 10 {
 						break
 					}
@@ -235,7 +258,6 @@ var commands = []*command{
 				fmt.Println(err)
 				return
 			}
-
 			err = f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
 				for i := 1; i <= num; i++ {
 					key := []byte(strconv.Itoa(i))
