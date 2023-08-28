@@ -13,18 +13,18 @@ func TestEncoding(t *testing.T) {
 	}{
 		{
 			desc:    "encode set row",
-			row:     &Row{Op: OpSet, Key: []byte("Key"), Value: []byte("Value")},
-			encoded: []byte{OpSet, 3, 0, 0, 0, 5, 'K', 'e', 'y', 'V', 'a', 'l', 'u', 'e'},
+			row:     &Row{Key: []byte("Key"), Value: []byte("Value")},
+			encoded: []byte{opSet, 3, 0, 0, 0, 5, 'K', 'e', 'y', 'V', 'a', 'l', 'u', 'e'},
 		},
 		{
 			desc:    "encode set row with empty value",
-			row:     &Row{Op: OpSet, Key: []byte("Key"), Value: nil},
-			encoded: []byte{OpSet, 3, 0, 0, 0, 0, 'K', 'e', 'y'},
+			row:     &Row{Key: []byte("Key"), Value: nil},
+			encoded: []byte{opSet, 3, 0, 0, 0, 0, 'K', 'e', 'y'},
 		},
 		{
 			desc:    "encode delete row",
-			row:     &Row{Op: OpDelete, Key: []byte("Key")},
-			encoded: []byte{OpDelete, 3, 0, 0, 0, 0, 'K', 'e', 'y'},
+			row:     &Row{IsDeleted: true, Key: []byte("Key")},
+			encoded: []byte{opDelete, 3, 0, 0, 0, 0, 'K', 'e', 'y'},
 		},
 	}
 
@@ -46,7 +46,7 @@ func TestEncoding(t *testing.T) {
 			if n != len(test.encoded) {
 				t.Fatalf("got decoding read size %d instead of %d", n, len(test.encoded))
 			}
-			isSameOp := gotDecoded.Op == test.row.Op
+			isSameOp := gotDecoded.IsDeleted == test.row.IsDeleted
 			isSameKey := bytes.Equal(gotDecoded.Key, test.row.Key)
 			isSameValue := bytes.Equal(gotDecoded.Value, test.row.Value)
 			if !isSameOp || !isSameKey || !isSameValue {

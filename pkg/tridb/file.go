@@ -39,7 +39,6 @@ func Open(fpath string) (*File, error) {
 	bufr := bufio.NewReader(f.r)
 	row := Row{}
 	for {
-		// Try to decode row
 		n, err := row.DecodeFrom(bufr)
 		f.woffset += n
 		if n == 0 && errors.Is(err, io.EOF) {
@@ -48,14 +47,10 @@ func Open(fpath string) (*File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode row at offset %d: %w", f.woffset, err)
 		}
-		// Update keydir accordingly (and check for invalid op)
-		switch row.Op {
-		default:
-			return nil, fmt.Errorf("unknown row op %q at offset %d", row.Op, f.woffset)
-		case OpSet:
-			f.keydir.set(&keydirItem{key: row.Key, position: &rowPosition{offset: f.woffset - n, size: n}})
-		case OpDelete:
+		if row.IsDeleted {
 			f.keydir.delete(row.Key)
+		} else {
+			f.keydir.set(&keydirItem{key: row.Key, position: &rowPosition{offset: f.woffset - n, size: n}})
 		}
 	}
 
@@ -216,13 +211,10 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 		}
 
 		// Update memstate
-		switch row.Op {
-		default:
-			panic("unreachable")
-		case OpSet:
-			f.keydir.set(&keydirItem{key: row.Key, position: &rowPosition{offset: f.woffset - n, size: n}})
-		case OpDelete:
+		if row.IsDeleted {
 			f.keydir.delete(row.Key)
+		} else {
+			f.keydir.set(&keydirItem{key: row.Key, position: &rowPosition{offset: f.woffset - n, size: n}})
 		}
 	}
 
@@ -266,14 +258,14 @@ type Writer struct {
 // Set adds a new key-value pair to the database.
 // Any previous key-value will be overwritten during the next compaction.
 func (w *Writer) Set(key, value []byte) {
-	w.rows = append(w.rows, &Row{Op: OpSet, Key: key, Value: value})
+	w.rows = append(w.rows, &Row{Key: key, Value: value})
 }
 
 // Delete removes a key-value pair from the database.
 //
 // If the key does not exist, delete as no impact on the database state.
 func (w *Writer) Delete(key []byte) {
-	w.rows = append(w.rows, &Row{Op: OpDelete, Key: key})
+	w.rows = append(w.rows, &Row{IsDeleted: true, Key: key})
 }
 
 // Reader can read rows from the database in a read transaction.

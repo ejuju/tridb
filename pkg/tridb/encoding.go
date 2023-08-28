@@ -12,14 +12,14 @@ import (
 // more specifically, a 'set' or 'delete' operation.
 // Rows are persisted to a file.
 type Row struct {
-	Op         byte
+	IsDeleted  bool // To differentiate ('set' and 'delete' ops)
 	Key, Value []byte
 }
 
 // Characters used to encode the type of write operations into a row.
 const (
-	OpSet    byte = '+'
-	OpDelete byte = '-'
+	opSet    byte = '+'
+	opDelete byte = '-'
 )
 
 // Key/value length constraints.
@@ -52,7 +52,11 @@ func (row *Row) Encode() ([]byte, error) {
 	}
 
 	// Write header (op, key-length and value-length)
-	encoded := []byte{row.Op, uint8(len(row.Key))}
+	op := opSet
+	if row.IsDeleted {
+		op = opDelete
+	}
+	encoded := []byte{op, uint8(len(row.Key))}
 	encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(row.Value)))
 
 	// Write key and value
@@ -93,7 +97,7 @@ func (row *Row) DecodeFrom(r io.Reader) (int, error) {
 		return read, fmt.Errorf("read value: %w", err)
 	}
 
-	row.Op = header[0]
+	row.IsDeleted = header[0] == opDelete
 	row.Key = key
 	row.Value = value
 	return read, nil
