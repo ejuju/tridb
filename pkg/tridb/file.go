@@ -8,20 +8,26 @@ import (
 	"io"
 	"os"
 	"sync"
+
+	"github.com/ejuju/tridb/pkg/fidx"
 )
 
 // File holds key-value pairs.
 type File struct {
-	mu      sync.RWMutex
-	fpath   string
-	keydir  *keydir
-	r, w    *os.File
-	woffset int
+	mu         sync.RWMutex
+	fpath      string
+	numBuckets int
+	idx        *fidx.LHTIndex
+	r, w       *os.File
+	woffset    int
 }
 
 // Open opens the database file.
-func Open(fpath string) (*File, error) {
-	f := &File{fpath: fpath, keydir: newKeydir(0)}
+func Open(fpath string, numBuckets int) (*File, error) {
+	if numBuckets <= 0 {
+		numBuckets = 1
+	}
+	f := &File{fpath: fpath, idx: fidx.NewLHTIndex(numBuckets), numBuckets: numBuckets}
 
 	// Remove file possibly left over from a crash during last compaction.
 	err := f.EnsureNoCompactingFile()
@@ -48,9 +54,9 @@ func Open(fpath string) (*File, error) {
 			return nil, fmt.Errorf("decode row at offset %d: %w", f.woffset, err)
 		}
 		if row.IsDeleted {
-			f.keydir.delete(row.Key)
+			f.idx.Delete(row.Key)
 		} else {
-			f.keydir.set(&keydirItem{key: row.Key, position: &rowPosition{offset: f.woffset - n, size: n}})
+			f.idx.Put(row.Key, fidx.Position{f.woffset - n, n})
 		}
 	}
 
@@ -64,6 +70,11 @@ func (f *File) Close() error {
 
 	return closeFileRW(f.r, f.w)
 }
+
+var (
+	ErrMemoryCorruption = errors.New("memory corruption")
+	ErrFileCorruption   = errors.New("file corruption")
+)
 
 // File extension added to file during compaction process.
 const CompactingFileExtension = ".compacting"
@@ -90,7 +101,7 @@ func (f *File) Compact() error {
 	}
 
 	// Init new file
-	cleanKeydir := newKeydir(0)
+	cleanIdx := fidx.NewLHTIndex(f.numBuckets)
 	cleanOffset := 0
 	cleanR, cleanW, err := openFileRW(f.fpath + CompactingFileExtension)
 	if err != nil {
@@ -98,21 +109,18 @@ func (f *File) Compact() error {
 	}
 
 	// Write rows to new file
-	for item := f.keydir.chronoList.first; item != nil; item = item.chronoNext {
-		encodedRow := make([]byte, item.position.size)
-		_, err := f.r.ReadAt(encodedRow, int64(item.position.offset))
+	for row := f.idx.Oldest; row != nil; row = row.Next {
+		encodedRow := make([]byte, row.Position.Size())
+		_, err := f.r.ReadAt(encodedRow, int64(row.Position.Offset()))
 		if err != nil {
-			return fmt.Errorf("read current row: %w", err)
+			return fmt.Errorf("read row: %w", err)
 		}
 		n, err := cleanW.Write(encodedRow)
 		cleanOffset += n
 		if err != nil {
-			return fmt.Errorf("write new row: %w", err)
+			return fmt.Errorf("write to new file: %w", err)
 		}
-		cleanKeydir.set(&keydirItem{key: item.key, position: &rowPosition{offset: cleanOffset - n, size: n}})
-	}
-	if err != nil {
-		return fmt.Errorf("walk rows: %w", err)
+		cleanIdx.Put(row.Key, fidx.Position{cleanOffset - n, n})
 	}
 
 	// Sync new file
@@ -132,10 +140,24 @@ func (f *File) Compact() error {
 	if err != nil {
 		return fmt.Errorf("swap: %w", err)
 	}
-	f.keydir = cleanKeydir
+	f.idx = cleanIdx
 	f.r, f.w = cleanR, cleanW
 	f.woffset = cleanOffset
 	return nil
+}
+
+func (f *File) readAndDecodeRow(position fidx.Position) (*Row, error) {
+	encodedRow := make([]byte, position.Size())
+	_, err := f.r.ReadAt(encodedRow, int64(position.Offset()))
+	if err != nil {
+		return nil, fmt.Errorf("read row: %w", err)
+	}
+	row := &Row{}
+	_, err = row.DecodeFrom(bytes.NewReader(encodedRow))
+	if err != nil {
+		return nil, fmt.Errorf("decode row: %w", err)
+	}
+	return row, nil
 }
 
 // Copies the datafile to the given writer.
@@ -212,9 +234,9 @@ func (f *File) ReadWrite(do func(r *Reader, w *Writer) error) error {
 
 		// Update memstate
 		if row.IsDeleted {
-			f.keydir.delete(row.Key)
+			f.idx.Delete(row.Key)
 		} else {
-			f.keydir.set(&keydirItem{key: row.Key, position: &rowPosition{offset: f.woffset - n, size: n}})
+			f.idx.Put(row.Key, fidx.Position{f.woffset - n, n})
 		}
 	}
 
@@ -233,10 +255,10 @@ func (f *File) handleCorruption(err error, size int) {
 	truncErr := os.Truncate(f.fpath, int64(size))
 	if truncErr != nil {
 		// Failed truncation, file is corrupted.
-		panic(fmt.Errorf("file corruption (%d trailing bytes): %w: %w", f.woffset-size, err, truncErr))
+		panic(fmt.Errorf("%w (%d): %w: %w", ErrFileCorruption, f.woffset-size, err, truncErr))
 	}
 	// Truncation succeeded, avoided file corruption but memstate is corrupted, only need restart.
-	panic(fmt.Errorf("memstate corruption: %w", err))
+	panic(fmt.Errorf("%w: %w", ErrMemoryCorruption, err))
 }
 
 // Note: In a read-only transaction,
@@ -274,80 +296,75 @@ type Reader struct {
 }
 
 // Has reports whether a key is known.
-func (r *Reader) Has(key []byte) bool { return r.f.keydir.ht.get(key) != nil }
+func (r *Reader) Has(key []byte) bool { return r.f.idx.Get(key) != nil }
 
 // Count returns the number of unique keys in the database.
-func (r *Reader) Count() int { return r.f.keydir.ht.numItems }
+func (r *Reader) Count() int { return r.f.idx.Count }
 
 // Get returns the eventual value associated with the given key,
 // if the key is not found, a nil value is returned.
 // If an error is returned, it is internal (failed OS read or decoding).
 func (r *Reader) Get(key []byte) ([]byte, error) {
-	entry := r.f.keydir.ht.get(key)
-	if entry == nil {
+	rowInfo := r.f.idx.Get(key)
+	if rowInfo == nil {
 		return nil, nil
 	}
-	// Read row
-	encodedRow := make([]byte, entry.position.size)
-	_, err := r.f.r.ReadAt(encodedRow, int64(entry.position.offset))
+	row, err := r.f.readAndDecodeRow(rowInfo.Position)
 	if err != nil {
-		return nil, fmt.Errorf("read row: %w", err)
-	}
-	// Decode row
-	row := &Row{}
-	_, err = row.DecodeFrom(bytes.NewReader(encodedRow))
-	if err != nil {
-		return nil, fmt.Errorf("decode row: %w", err)
+		return nil, err
 	}
 	return row.Value, nil
 }
 
-func (r *Reader) Cursor() *Cursor {
-	return &Cursor{r: r, chronoList: r.f.keydir.chronoList}
+type RowReader struct {
+	r       *Reader
+	current *fidx.RowInfo
 }
 
-type Cursor struct {
-	r          *Reader
-	current    *keydirItem
-	chronoList *keydirChronoList
-}
-
-func (c *Cursor) First() []byte {
-	c.current = c.chronoList.first
-	if c.current == nil {
+func (r *Reader) Oldest() *RowReader {
+	oldest := r.f.idx.Oldest
+	if oldest == nil {
 		return nil
 	}
-	return c.current.key
+	return &RowReader{r: r, current: oldest}
 }
 
-func (c *Cursor) Last() []byte {
-	c.current = c.chronoList.last
-	if c.current == nil {
+func (r *Reader) Latest() *RowReader {
+	latest := r.f.idx.Latest
+	if latest == nil {
 		return nil
 	}
-	return c.current.key
+	return &RowReader{r: r, current: latest}
 }
 
-func (c *Cursor) Previous() []byte {
-	c.current = c.current.chronoPrevious
-	if c.current == nil {
+func (r *Reader) Seek(key []byte) *RowReader {
+	rinfo := r.f.idx.Get(key)
+	if rinfo == nil {
 		return nil
 	}
-	return c.current.key
+	return &RowReader{r: r, current: rinfo}
 }
 
-func (c *Cursor) Next() []byte {
-	c.current = c.current.chronoNext
-	if c.current == nil {
+func (c *RowReader) Key() []byte { return c.current.Key }
+
+func (c *RowReader) Value() ([]byte, error) {
+	row, err := c.r.f.readAndDecodeRow(c.current.Position)
+	if err != nil {
+		return nil, err
+	}
+	return row.Value, nil
+}
+
+func (c *RowReader) Previous() *RowReader {
+	if c.current.Previous == nil {
 		return nil
 	}
-	return c.current.key
+	return &RowReader{r: c.r, current: c.current.Previous}
 }
 
-func (r *Reader) SumKeySize() int {
-	size := 0
-	for item := r.f.keydir.chronoList.first; item != nil; item = item.chronoNext {
-		size += len(item.key)
+func (c *RowReader) Next() *RowReader {
+	if c.current.Next == nil {
+		return nil
 	}
-	return size
+	return &RowReader{r: c.r, current: c.current.Next}
 }

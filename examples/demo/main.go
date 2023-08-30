@@ -8,7 +8,7 @@ import (
 
 func main() {
 	// Open the database file
-	f, err := tridb.Open("main.tridb")
+	f, err := tridb.Open("main.tridb", 10)
 	if err != nil {
 		panic(err)
 	}
@@ -71,9 +71,9 @@ func main() {
 
 	// Iterate over keys
 	_ = f.Read(func(r *tridb.Reader) error {
-		c := r.Cursor()
-		for key := c.Last(); key != nil; c.Previous() {
-			log.Println(key)
+		for rr := r.Latest(); rr != nil; rr = rr.Next() {
+			log.Println(rr.Key())
+			log.Println(rr.Value())
 		}
 		return nil
 	})

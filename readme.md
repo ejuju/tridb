@@ -24,6 +24,9 @@ References:
 - https://scholar.harvard.edu/files/stratos/files/keyvaluestorageengines.pdf
 - https://riak.com/assets/bitcask-intro.pdf
 
+Todo:
+- Fix memory leak in f.Compact (index buckets not being garbage collected after being dereferenced)
+
 Roadmap:
 - Detect/handle file corruption (when write operation is interrupted by OS / sudden shutdown)
 - Indexing support
@@ -33,5 +36,5 @@ Roadmap:
 - Better REPL
 
 Design considerations for keydir:
-- Trie (suitable for text, takes a lot of space in memory, can sort lexicographically)
-- Doubly-linked list + hashtable (takes little memory, can sort chronologically)
+- Includes adaptive radix trie for insert, search, delete and lexicographical iteration.
+- Includes doubly linked list for chronological iteration.

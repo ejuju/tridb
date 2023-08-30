@@ -24,7 +24,7 @@ func main() {
 	}
 
 	start := time.Now()
-	f, err := tridb.Open(os.Args[1])
+	f, err := tridb.Open(os.Args[1], 100_000_000)
 	if err != nil {
 		log.Println(err)
 		return
@@ -189,23 +189,12 @@ var commands = []*command{
 		},
 	},
 	{
-		keywords: []string{"sum-key-size"},
-		desc:     "reports the sum of all keys",
-		do: func(f *tridb.File, args ...string) {
-			_ = f.Read(func(r *tridb.Reader) error {
-				fmt.Println(r.SumKeySize())
-				return nil
-			})
-		},
-	},
-	{
 		keywords: []string{"all"},
 		desc:     "show all unique keys",
 		do: func(f *tridb.File, args ...string) {
 			_ = f.Read(func(r *tridb.Reader) error {
-				c := r.Cursor()
-				for key := c.Last(); key != nil; key = c.Previous() {
-					fmt.Printf("%q\n", key)
+				for rr := r.Oldest(); rr != nil; rr = rr.Next() {
+					fmt.Printf("%q\n", rr.Key())
 				}
 				return nil
 			})
@@ -216,19 +205,18 @@ var commands = []*command{
 		desc:     "show the last 10 key-value pairs",
 		do: func(f *tridb.File, args ...string) {
 			_ = f.Read(func(r *tridb.Reader) error {
-				c := r.Cursor()
 				i := 0
-				for key := c.Last(); key != nil; key = c.Previous() {
+				for rr := r.Latest(); rr != nil; rr = rr.Previous() {
 					if i >= 10 {
 						break
 					}
 					i++
-					v, err := r.Get(key)
+					v, err := rr.Value()
 					if err != nil {
 						fmt.Println(err)
 						return nil
 					}
-					fmt.Printf("%q = %q\n", key, v)
+					fmt.Printf("%q = %q\n", rr.Key(), v)
 				}
 				return nil
 			})
@@ -239,19 +227,18 @@ var commands = []*command{
 		desc:     "show the first 10 key-value pairs",
 		do: func(f *tridb.File, args ...string) {
 			_ = f.Read(func(r *tridb.Reader) error {
-				c := r.Cursor()
 				i := 0
-				for key := c.First(); key != nil; key = c.Next() {
+				for rr := r.Oldest(); rr != nil; rr = rr.Next() {
 					if i >= 10 {
 						break
 					}
 					i++
-					v, err := r.Get(key)
+					v, err := rr.Value()
 					if err != nil {
 						fmt.Println(err)
 						return nil
 					}
-					fmt.Printf("%q = %q\n", key, v)
+					fmt.Printf("%q = %q\n", rr.Key(), v)
 				}
 				return nil
 			})
@@ -270,7 +257,7 @@ var commands = []*command{
 			}
 			err = f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
 				for i := 0; i < num; i++ {
-					key := []byte(fmt.Sprintf("%010d", i))
+					key := []byte(strconv.Itoa(i))
 					value := []byte(time.Now().Format(time.RFC3339))
 					w.Set(key, value)
 				}
@@ -279,6 +266,33 @@ var commands = []*command{
 			if err != nil {
 				fmt.Println(err)
 				return
+			}
+			elapsed := time.Since(start)
+			fmt.Printf("added %d rows in %s\n", num, elapsed)
+		},
+	},
+	{
+		keywords: []string{"bench"},
+		desc:     "run quick benchmark",
+		args:     []string{"number of rows"},
+		do: func(f *tridb.File, args ...string) {
+			start := time.Now()
+			num, err := strconv.Atoi(args[0])
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			for i := 0; i < num; i++ {
+				err = f.ReadWrite(func(r *tridb.Reader, w *tridb.Writer) error {
+					key := tridb.MustNewRandID(8).Hex()
+					value := []byte(time.Now().Format(time.RFC3339))
+					w.Set(key, value)
+					return nil
+				})
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
 			}
 			elapsed := time.Since(start)
 			fmt.Printf("added %d rows in %s (%.f rows per second)\n", num, elapsed, float64(num)/elapsed.Seconds())
